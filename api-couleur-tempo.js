@@ -118,6 +118,23 @@ function loadColor() {
   return { codeCouleur: null, lastFetch: null };
 }
 
+// Check if stored color is still valid (fetched today)
+function isColorValid(colorData) {
+  if (!colorData || colorData.codeCouleur === null || !colorData.lastFetch) {
+    return false;
+  }
+  
+  let now = new Date();
+  let lastFetch = new Date(colorData.lastFetch);
+  
+  // Check if lastFetch is from today
+  return (
+    lastFetch.getFullYear() === now.getFullYear() &&
+    lastFetch.getMonth() === now.getMonth() &&
+    lastFetch.getDate() === now.getDate()
+  );
+}
+
 // Save color to storage
 function saveColor(codeCouleur) {
   let state = { 
@@ -206,14 +223,16 @@ function getMinutesUntilNextCheck() {
 // Update switch state based on current conditions
 function updateSwitchState() {
   let colorData = loadColor();
-  let codeCouleur = colorData.codeCouleur;
-  let codeHoraire = getCurrentHoraireCode();
   
-  if (codeCouleur === null) {
-    console.log("No color data available, fetching...");
+  // Validate color is still current (fetched today)
+  if (!isColorValid(colorData)) {
+    console.log("Color data is outdated or missing, fetching fresh data...");
     callAPI();
     return;
   }
+  
+  let codeCouleur = colorData.codeCouleur;
+  let codeHoraire = getCurrentHoraireCode();
   
   let colorName = codeCouleur === 1 ? "Bleu" : codeCouleur === 2 ? "Blanc" : "Rouge";
   let horaireName = codeHoraire === 1 ? "HP" : "HC";
@@ -364,11 +383,11 @@ loadConfig(function() {
   
   // Check if we have valid color data
   let colorData = loadColor();
-  if (!colorData || colorData.codeCouleur === null) {
-    console.log("No color data found, fetching initial data...");
+  if (!isColorValid(colorData)) {
+    console.log("No valid color data found (outdated or missing), fetching...");
     callAPI();
   } else {
-    console.log("Color data loaded from storage");
+    console.log("Valid color data loaded from storage");
     updateSwitchState();
   }
 });

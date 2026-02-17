@@ -175,6 +175,21 @@ function loadCalendar() {
   return null;
 }
 
+// Check if calendar data is still valid (fetched within last 24 hours)
+function isCalendarValid() {
+  let lastFetch = Script.storage.getItem("calendarFetch");
+  if (!lastFetch) {
+    return false;
+  }
+  
+  let now = new Date();
+  let lastFetchDate = new Date(lastFetch);
+  let hoursSinceLastFetch = (now.getTime() - lastFetchDate.getTime()) / (1000 * 60 * 60);
+  
+  // Calendar is valid if fetched within last 24 hours
+  return hoursSinceLastFetch < 24;
+}
+
 // Save calendar to storage (compact format)
 function saveCalendar(calendar) {
   // Store as array of [date, colorCode] to save space
@@ -469,6 +484,13 @@ function updateSwitchState() {
   let colorCode = getColorForDate(today);
   let horaireCode = getCurrentHoraireCode();
   
+  // Check if calendar is outdated (>24 hours old)
+  if (!isCalendarValid()) {
+    console.log("Calendar is outdated (>24h old), fetching fresh data...");
+    fetchCalendar();
+    return;
+  }
+  
   if (colorCode === null) {
     console.log("No calendar data for today, fetching...");
     fetchCalendar();
@@ -545,11 +567,11 @@ loadConfig(function() {
   
   // Check if we have a valid calendar
   let calendar = loadCalendar();
-  if (!calendar || calendar.length === 0) {
-    console.log("No calendar found, fetching initial data...");
+  if (!calendar || calendar.length === 0 || !isCalendarValid()) {
+    console.log("No valid calendar found (missing, empty, or outdated), fetching...");
     fetchCalendar();
   } else {
-    console.log("Calendar loaded:", calendar.length, "days");
+    console.log("Valid calendar loaded:", calendar.length, "days");
     updateSwitchState();
   }
 });
