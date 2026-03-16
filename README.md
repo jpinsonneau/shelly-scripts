@@ -30,7 +30,7 @@ Both scripts are equally efficient (1 API call/day) and provide the same functio
 
 **Scheduling**: 
 - **6:00 & 22:00** - HP/HC transitions (calculated locally, no API call)
-- **11:00** - Fetch color from API (only API call of the day)
+- **3:00 AM** (api-couleur-tempo.js) or **11:00 AM** (api-commerce-edf.js) - Fetch color from API (only API call of the day)
 
 Data persists across reboots via Shelly's storage.
 

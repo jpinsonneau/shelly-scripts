@@ -5,7 +5,7 @@
  * Switch turns ON only during HP Rouge (Peak Hours on Red Days).
  * 
  * API: https://www.api-couleur-tempo.fr/api/now (Third-party)
- * Checks: 1 API call per day (at 11:00 AM for color data)
+ * Checks: 1 API call per day (at 3:00 AM for color data)
  * HP/HC state calculated locally based on time
  * 
  * Configuration: Use KVS (Key-Value Store) to configure without editing script
@@ -21,7 +21,7 @@ let DEFAULT_CONFIG = {
   switchId: 1,
   hpStartHour: 6,
   hpEndHour: 22,
-  colorCheckHour: 11,
+  colorCheckHour: 3,
   retryDelaySeconds: 30,
   fallbackBehavior: "PREVIOUS_STATE", // PREVIOUS_STATE, ON, or OFF
   notificationsEnabled: false,
@@ -104,7 +104,7 @@ function sendNotification(title, message, severity) {
   }
   
   // MQTT
-  if (CONFIG.mqttEnabled && typeof MQTT !== "undefined") {
+  if (CONFIG.mqttEnabled) {
     MQTT.publish(CONFIG.mqttTopic, fullMessage, 0, false);
   }
 }
@@ -198,7 +198,7 @@ function getMinutesUntilNextCheck() {
   
   let hpStart = CONFIG.hpStartHour * 60;      // 6:00 = 360 min
   let hpEnd = CONFIG.hpEndHour * 60;          // 22:00 = 1320 min
-  let colorCheck = CONFIG.colorCheckHour * 60; // 11:00 = 660 min
+  let colorCheck = CONFIG.colorCheckHour * 60; // 3:00 = 180 min
   
   let checkTimes = [hpStart, colorCheck, hpEnd];
   let nextCheck = null;
@@ -252,14 +252,14 @@ function updateSwitchState() {
   
   logStatus();
   
-  // Check if we need to refresh color (at 11 AM)
+  // Check if we need to refresh color (before 6 AM)
   let now = new Date();
   let currentHour = now.getHours();
   let currentMinute = now.getMinutes();
   let minutesSinceMidnight = currentHour * 60 + currentMinute;
   let colorCheckTime = CONFIG.colorCheckHour * 60;
   
-  // If it's around color check time (11:00 +/- 30 min), fetch new color
+  // If it's around color check time (before 6 AM +/- 30 min), fetch new color
   if (Math.abs(minutesSinceMidnight - colorCheckTime) < 30) {
     let lastFetch = colorData.lastFetch;
     
@@ -381,13 +381,7 @@ loadConfig(function() {
   console.log("Fallback behavior:", CONFIG.fallbackBehavior);
   console.log("Notifications:", CONFIG.notificationsEnabled ? "enabled" : "disabled");
   
-  // Check if we have valid color data
-  let colorData = loadColor();
-  if (!isColorValid(colorData)) {
-    console.log("No valid color data found (outdated or missing), fetching...");
-    callAPI();
-  } else {
-    console.log("Valid color data loaded from storage");
-    updateSwitchState();
-  }
+  // Always fetch fresh color on startup for robustness, regardless of cache
+  console.log("Fetching fresh color on startup...");
+  callAPI();
 });
