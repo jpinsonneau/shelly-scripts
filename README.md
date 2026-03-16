@@ -29,7 +29,7 @@ Both scripts are equally efficient (1 API call/day) and provide the same functio
 **Control Logic**: Switch ON only when HP (6:00-22:00) AND Red day, OFF otherwise.
 
 **Scheduling**: 
-- **6:00 & 22:00** - HP/HC transitions (calculated locally, no API call)
+- **5:50 & 22:00** - Check switch state (with 10-minute safety delay before 6:00 AM for heating system ramp-up)
 - **3:00 AM** (api-couleur-tempo.js) or **11:00 AM** (api-commerce-edf.js) - Fetch color from API (only API call of the day)
 
 Data persists across reboots via Shelly's storage.
@@ -53,6 +53,7 @@ http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.switchId"&value=0
 **Common options**: 
 - `tempo.switchId` - Switch ID (0 or 1)
 - `tempo.hpStartHour` / `tempo.hpEndHour` - HP period hours
+- `tempo.safetyDelayMinutes` - Safety delay before HP starts for heating system ramp-up (default: 10 minutes)
 - `tempo.retryDelaySeconds` - Retry delay after API error (default: 30s)
 - `tempo.fallbackBehavior` - Switch behavior on error: `"PREVIOUS_STATE"`, `"ON"`, or `"OFF"`
 - `tempo.webhookUrl` - Webhook for error notifications

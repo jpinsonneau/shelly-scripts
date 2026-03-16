@@ -24,8 +24,9 @@ let DEFAULT_CONFIG = {
   hpStartHour: 6,
   hpEndHour: 22,
   calendarRefreshHour: 11,
-  calendarDaysAhead: 30,
+  calendarDaysAhead: 7,
   retryDelaySeconds: 30,
+  safetyDelayMinutes: 10,
   fallbackBehavior: "PREVIOUS_STATE", // PREVIOUS_STATE, ON, or OFF
   notificationsEnabled: false,
   webhookEnabled: false,
@@ -63,6 +64,7 @@ function loadConfig(callback) {
       else if (key === "tempo.hpEndHour") CONFIG.hpEndHour = item.value;
       else if (key === "tempo.calendarRefreshHour") CONFIG.calendarRefreshHour = item.value;
       else if (key === "tempo.retryDelaySeconds") CONFIG.retryDelaySeconds = item.value;
+      else if (key === "tempo.safetyDelayMinutes") CONFIG.safetyDelayMinutes = item.value;
       else if (key === "tempo.fallbackBehavior") CONFIG.fallbackBehavior = item.value;
       else if (key === "tempo.notificationsEnabled") CONFIG.notificationsEnabled = item.value;
       else if (key === "tempo.webhookEnabled") CONFIG.webhookEnabled = item.value;
@@ -170,7 +172,12 @@ function getColorName(code) {
 function loadCalendar() {
   let stored = Script.storage.getItem("calendar");
   if (stored) {
-    return JSON.parse(stored);
+    try {
+      return JSON.parse(stored);
+    } catch (e) {
+      console.log("Warning: Corrupted calendar data in storage, will re-fetch:", e);
+      return null;
+    }
   }
   return null;
 }
@@ -460,12 +467,14 @@ function fetchCalendar() {
   let requestId = "" + new Date().getTime();
   
   Shelly.call(
-    "HTTP.GET",
+    "HTTP.Request",
     {
       url: url,
+      method: "GET",
       timeout: 10,
       headers: {
         "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "identity",
         "application-origine-controlee": "site_RC",
         "Content-Type": "application/json",
         "Origin": "https://particulier.edf.fr",

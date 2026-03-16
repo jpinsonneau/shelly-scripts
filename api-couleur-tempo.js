@@ -23,6 +23,7 @@ let DEFAULT_CONFIG = {
   hpEndHour: 22,
   colorCheckHour: 3,
   retryDelaySeconds: 30,
+  safetyDelayMinutes: 10,
   fallbackBehavior: "PREVIOUS_STATE", // PREVIOUS_STATE, ON, or OFF
   notificationsEnabled: false,
   webhookEnabled: false,
@@ -60,6 +61,7 @@ function loadConfig(callback) {
       else if (key === "tempo.hpEndHour") CONFIG.hpEndHour = item.value;
       else if (key === "tempo.colorCheckHour") CONFIG.colorCheckHour = item.value;
       else if (key === "tempo.retryDelaySeconds") CONFIG.retryDelaySeconds = item.value;
+      else if (key === "tempo.safetyDelayMinutes") CONFIG.safetyDelayMinutes = item.value;
       else if (key === "tempo.fallbackBehavior") CONFIG.fallbackBehavior = item.value;
       else if (key === "tempo.notificationsEnabled") CONFIG.notificationsEnabled = item.value;
       else if (key === "tempo.webhookEnabled") CONFIG.webhookEnabled = item.value;
@@ -196,7 +198,7 @@ function getMinutesUntilNextCheck() {
   let currentMinute = now.getMinutes();
   let minutesSinceMidnight = currentHour * 60 + currentMinute;
   
-  let hpStart = CONFIG.hpStartHour * 60;      // 6:00 = 360 min
+  let hpStart = CONFIG.hpStartHour * 60 - CONFIG.safetyDelayMinutes;  // 5:50 = 350 min (6:00 - 10 min safety delay)
   let hpEnd = CONFIG.hpEndHour * 60;          // 22:00 = 1320 min
   let colorCheck = CONFIG.colorCheckHour * 60; // 3:00 = 180 min
   
@@ -377,6 +379,12 @@ console.log("Tempo Third-Party API Script starting...");
 loadConfig(function() {
   console.log("Switch ID:", CONFIG.switchId);
   console.log("HP Hours:", CONFIG.hpStartHour + ":00 -", CONFIG.hpEndHour + ":00");
+  // Calculate check time (safety delay before HP)
+  let checkMinutes = CONFIG.hpStartHour * 60 - CONFIG.safetyDelayMinutes;
+  let checkHour = Math.floor(checkMinutes / 60);
+  let checkMin = checkMinutes % 60;
+  let checkTimeStr = checkHour + ":" + (checkMin < 10 ? "0" : "") + checkMin;
+  console.log("Safety delay:", CONFIG.safetyDelayMinutes, "minutes (check at", checkTimeStr, ")");
   console.log("Retry delay:", CONFIG.retryDelaySeconds, "seconds");
   console.log("Fallback behavior:", CONFIG.fallbackBehavior);
   console.log("Notifications:", CONFIG.notificationsEnabled ? "enabled" : "disabled");
