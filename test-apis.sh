@@ -7,19 +7,19 @@ echo "  🔌 Tempo API Comparison Test"
 echo "================================================"
 echo ""
 
-echo "1️⃣  Testing api-couleur-tempo.fr (Simple API)"
-echo "   URL: https://www.api-couleur-tempo.fr/api/now"
+echo "1️⃣  Testing api-couleur-tempo.fr (Third-Party API)"
+echo "   URL: https://www.api-couleur-tempo.fr/api/jourTempo/today"
 echo "   Auth: None required"
 echo "   ---"
-SIMPLE_RESULT=$(curl -s 'https://www.api-couleur-tempo.fr/api/now')
+SIMPLE_RESULT=$(curl -s 'https://www.api-couleur-tempo.fr/api/jourTempo/today')
 if [ $? -eq 0 ]; then
   echo "   ✅ Response:"
   echo "$SIMPLE_RESULT" | jq '.'
   echo ""
   echo "   Current Status:"
-  COULEUR=$(echo "$SIMPLE_RESULT" | jq -r '.codeCouleur')
-  HORAIRE=$(echo "$SIMPLE_RESULT" | jq -r '.codeHoraire')
-  LIB=$(echo "$SIMPLE_RESULT" | jq -r '.libTarif')
+  COULEUR=$(echo "$SIMPLE_RESULT" | jq -r '.codeJour')
+  DATE_JOUR=$(echo "$SIMPLE_RESULT" | jq -r '.dateJour')
+  LIB=$(echo "$SIMPLE_RESULT" | jq -r '.libCouleur')
   
   case $COULEUR in
     1) COLOR_NAME="🔵 Bleu" ;;
@@ -28,14 +28,8 @@ if [ $? -eq 0 ]; then
     *) COLOR_NAME="❓ Unknown" ;;
   esac
   
-  case $HORAIRE in
-    1) PERIOD="☀️  HP (6h-22h)" ;;
-    2) PERIOD="🌙 HC (22h-6h)" ;;
-    *) PERIOD="❓ Unknown" ;;
-  esac
-  
+  echo "   Date: $DATE_JOUR"
   echo "   Color: $COLOR_NAME (code: $COULEUR)"
-  echo "   Period: $PERIOD (code: $HORAIRE)"
   echo "   Label: $LIB"
 else
   echo "   ❌ API call failed"
@@ -87,8 +81,8 @@ echo ""
 echo "================================================"
 echo ""
 echo "📊 Summary:"
-echo "   • api-couleur-tempo.fr: Simple, reliable, real-time"
-echo "   • api-commerce.edf.fr: Advanced, calendar, 1 call/day"
+echo "   • api-couleur-tempo.fr: Simple, third-party, daily color"
+echo "   • api-commerce.edf.fr: Official EDF, calendar, 1 call/day"
 echo ""
 echo "Both APIs work without authentication! ✅"
 echo "================================================"

@@ -5,10 +5,11 @@
  * Switch turns ON only during HP Rouge (Peak Hours on Red Days).
  * 
  * This version uses the official EDF API for maximum reliability.
- * Fetches calendar data once per day (EDF publishes tomorrow's color at 11:00 AM).
+ * Fetches calendar data once per day at 11:02 AM (when EDF publishes tomorrow's color).
  * 
  * API: https://api-commerce.edf.fr/commerce/activet/v1/calendrier-jours-effacement
- * Checks: ~1 API call per day + HP/HC transitions
+ * Checks: 3 times per day (5:50 AM HP start, 11:02 AM calendar refresh, 22:10 PM HC start)
+ * HP/HC state calculated locally based on time with 10-minute safety delay
  * 
  * Configuration: Use KVS (Key-Value Store) to configure without editing script
  * See README.md for configuration instructions
@@ -24,7 +25,7 @@ let DEFAULT_CONFIG = {
   hpStartHour: 6,
   hpEndHour: 22,
   calendarRefreshHour: 11,
-  calendarDaysAhead: 7,
+  calendarDaysAhead: 1,
   retryDelaySeconds: 30,
   safetyDelayMinutes: 10,
   fallbackBehavior: "PREVIOUS_STATE", // PREVIOUS_STATE, ON, or OFF
@@ -39,6 +40,10 @@ let DEFAULT_CONFIG = {
 let CONFIG = {};
 let activeTimer = null;
 let lastErrorNotified = null;
+let consecutiveFailures = 0; // Track failures for exponential backoff
+
+// Exponential backoff delays (in seconds): 30s → 1m → 2m → 5m → 10m → 30m → 1h (max)
+let RETRY_DELAY_STEPS = [30, 60, 120, 300, 600, 1800, 3600];
 
 // Load configuration from KVS or use defaults
 function loadConfig(callback) {
@@ -82,22 +87,24 @@ function loadConfig(callback) {
 // Send notification via configured method
 function sendNotification(title, message, severity) {
   if (!CONFIG.notificationsEnabled) return;
-  
-  // Avoid spamming notifications (max 1 per hour for same error type)
-  let now = new Date().getTime();
-  if (lastErrorNotified && (now - lastErrorNotified) < 60 * 60 * 1000) {
-    console.log("Notification throttled (< 1 hour since last)");
-    return;
+
+  // Skip throttling for recovery notifications (info severity)
+  if (severity !== "info") {
+    let now = new Date().getTime();
+    if (lastErrorNotified && (now - lastErrorNotified) < 60 * 60 * 1000) {
+      console.log("Notification throttled (< 1 hour since last)");
+      return;
+    }
+    lastErrorNotified = now;
   }
-  lastErrorNotified = now;
-  
+
   let fullMessage = "[Tempo Script] " + title + ": " + message;
-  
+
   // Method 1: HTTP Webhook
   if (CONFIG.webhookEnabled && CONFIG.webhookUrl) {
     sendWebhookNotification(fullMessage, severity);
   }
-  
+
   // Method 2: MQTT
   if (CONFIG.mqttEnabled) {
     sendMqttNotification(fullMessage, severity);
@@ -203,8 +210,29 @@ function saveCalendar(calendar) {
   let compact = calendar.map(function(entry) {
     return [entry.dateApplication, entry.colorCode];
   });
+  
+  let fetchTime = new Date().toISOString();
+  
+  // Save to Script.storage for internal use (fast, private)
   Script.storage.setItem("calendar", JSON.stringify(compact));
-  Script.storage.setItem("calendarFetch", new Date().toISOString());
+  Script.storage.setItem("calendarFetch", fetchTime);
+  
+  // Save to KVS for external monitoring (delayed to avoid blocking)
+  let kvsCalendar = calendar.map(function(entry) {
+    return [entry.dateApplication, entry.colorCode, getColorName(entry.colorCode)];
+  });
+  
+  Timer.set(1000, false, function() {
+    Shelly.call("KVS.Set", {
+      key: "tempo.edf.calendar",
+      value: JSON.stringify(kvsCalendar)
+    });
+    
+    Shelly.call("KVS.Set", {
+      key: "tempo.edf.lastFetch",
+      value: fetchTime
+    });
+  });
 }
 
 // Get color for a specific date (YYYY-MM-DD format)
@@ -257,30 +285,31 @@ function buildCalendarUrl() {
          "&identifiantConsommateur=src";
 }
 
-function logStatus() {
-  Shelly.call(
-    "Switch.GetStatus",
-    { id: CONFIG.switchId },
-    function (result, error_code, error_message) {
-      if (error_code !== 0) {
-        console.log("Switch Error:", error_message);
-        return;
-      }
-      console.log("Switch", result.id, "is", result.output ? "ON" : "OFF");
-    }
-  );
-}
-
 // Determine current HP/HC state (1=HP, 2=HC)
+// Determine current HP/HC state (1=HP, 2=HC)
+// Applies safety delay to consider HP starting earlier
 function getCurrentHoraireCode() {
   let now = new Date();
   let hour = now.getHours();
+  let minute = now.getMinutes();
+  let minutesSinceMidnight = hour * 60 + minute;
   
-  // HP: 6:00 - 22:00, HC: 22:00 - 6:00
-  if (hour >= CONFIG.hpStartHour && hour < CONFIG.hpEndHour) {
+  // Apply safety delay: HP starts safetyDelayMinutes before configured hour
+  let hpStartMinutes = CONFIG.hpStartHour * 60 - CONFIG.safetyDelayMinutes;
+  let hpEndMinutes = CONFIG.hpEndHour * 60 + CONFIG.safetyDelayMinutes;
+  
+  // HP: (6:00 - safety) to 22:00, HC: 22:00 to (6:00 - safety)
+  if (minutesSinceMidnight >= hpStartMinutes && minutesSinceMidnight < hpEndMinutes) {
     return 1; // HP
   }
   return 2; // HC
+}
+
+// Get retry delay with exponential backoff based on failure count
+function getRetryDelay() {
+  // consecutiveFailures is already incremented, so subtract 1 for array index
+  let index = Math.min(consecutiveFailures - 1, RETRY_DELAY_STEPS.length - 1);
+  return RETRY_DELAY_STEPS[index];
 }
 
 // Apply fallback behavior when API fails
@@ -298,51 +327,61 @@ function applyFallbackBehavior() {
     id: CONFIG.switchId,
     on: shouldBeOn,
   });
-  
-  logStatus();
 }
 
-// Calculate minutes until next check time
-function getMinutesUntilNextCheck() {
+// Calculate minutes until next check time and determine what action to take
+function getNextCheckInfo() {
   let now = new Date();
   let currentHour = now.getHours();
   let currentMinute = now.getMinutes();
   let minutesSinceMidnight = currentHour * 60 + currentMinute;
   
-  let hpStart = CONFIG.hpStartHour * 60;              // 6:00 = 360 min
-  let hpEnd = CONFIG.hpEndHour * 60;                  // 22:00 = 1320 min
+  let hpStart = CONFIG.hpStartHour * 60 - CONFIG.safetyDelayMinutes;  // 5:50 = 350 min (6:00 - 10 min safety delay)
+  let hpEnd = CONFIG.hpEndHour * 60 + CONFIG.safetyDelayMinutes;      // 22:10 = 1330 min
   let calendarRefresh = CONFIG.calendarRefreshHour * 60; // 11:00 = 660 min
   
-  let checkTimes = [hpStart, calendarRefresh, hpEnd];
-  let nextCheck = null;
+  let checkTimes = [
+    { time: hpStart, action: "updateSwitch", label: "HP start" },
+    { time: calendarRefresh, action: "fetchCalendar", label: "Calendar refresh" },
+    { time: hpEnd, action: "updateSwitch", label: "HP end" }
+  ];
   
   // Find next check time today
   for (let i = 0; i < checkTimes.length; i++) {
-    if (checkTimes[i] > minutesSinceMidnight) {
-      nextCheck = checkTimes[i];
-      break;
+    if (checkTimes[i].time > minutesSinceMidnight) {
+      let minutesUntil = checkTimes[i].time - minutesSinceMidnight;
+      return {
+        minutesUntil: minutesUntil,
+        action: checkTimes[i].action,
+        label: checkTimes[i].label
+      };
     }
   }
   
-  // If no check time today, use first check tomorrow (6 AM)
-  if (nextCheck === null) {
-    nextCheck = hpStart + (24 * 60);
-  }
-  
-  let minutesUntil = nextCheck - minutesSinceMidnight;
-  return minutesUntil;
+  // If no check time today, use first check tomorrow (5:50 AM with safety delay)
+  let minutesUntil = hpStart + (24 * 60) - minutesSinceMidnight;
+  return {
+    minutesUntil: minutesUntil,
+    action: "updateSwitch",
+    label: "HP start (tomorrow)"
+  };
 }
 
-// Schedule the next check
-function scheduleNextCheck(minutesUntil) {
+// Schedule the next check with appropriate action
+function scheduleNextCheck() {
   // Clear any existing timer
   if (activeTimer !== null) {
     Timer.clear(activeTimer);
     activeTimer = null;
   }
   
-  // Add 2 minutes buffer
-  let delayMinutes = minutesUntil + 2;
+  let nextCheck = getNextCheckInfo();
+  
+  // Add 2 minutes buffer only for calendar refresh (to ensure data is published)
+  let delayMinutes = nextCheck.minutesUntil;
+  if (nextCheck.action === "fetchCalendar") {
+    delayMinutes += 2;
+  }
   let delayMs = delayMinutes * 60 * 1000;
   
   // Cap at 24 hours
@@ -351,8 +390,23 @@ function scheduleNextCheck(minutesUntil) {
     delayMinutes = 24 * 60;
   }
   
-  console.log("Next check in", delayMinutes, "minutes");
-  activeTimer = Timer.set(delayMs, false, updateSwitchState);
+  console.log("Next check in", delayMinutes, "minutes -", nextCheck.label);
+  
+  // Schedule appropriate action
+  if (nextCheck.action === "fetchCalendar") {
+    activeTimer = Timer.set(delayMs, false, fetchCalendar);
+  } else {
+    activeTimer = Timer.set(delayMs, false, updateSwitchState);
+  }
+  
+  // Save next check time to KVS for monitoring (delayed to avoid blocking)
+  let nextCheckTime = new Date(new Date().getTime() + delayMs).toISOString();
+  Timer.set(1000, false, function() {
+    Shelly.call("KVS.Set", {
+      key: "tempo.edf.nextCheck",
+      value: nextCheckTime
+    });
+  });
 }
 
 // Handle calendar API response
@@ -405,18 +459,26 @@ function handleCalendarResponse(result, error_code, error_message) {
   if (!data.content || !data.content.options || data.content.options.length === 0) {
     console.log("Invalid calendar data");
     
-    let retryMinutes = Math.round(CONFIG.retryDelaySeconds / 60);
-    let retrySeconds = CONFIG.retryDelaySeconds % 60;
-    let retryMsg = retryMinutes > 0 ? retryMinutes + " minutes" : retrySeconds + " seconds";
+    // Increment failure counter for exponential backoff
+    consecutiveFailures++;
+    let retryDelay = getRetryDelay();
+    
+    let retryMinutes = Math.floor(retryDelay / 60);
+    let retrySeconds = retryDelay % 60;
+    let retryMsg = retryMinutes > 0 
+      ? (retrySeconds > 0 ? retryMinutes + "m " + retrySeconds + "s" : retryMinutes + " minutes")
+      : retrySeconds + " seconds";
+    
+    console.log("Consecutive failures:", consecutiveFailures, "- retry in", retryMsg);
     
     sendNotification(
       "Invalid Calendar Data",
-      "API returned empty or invalid data structure.\nWill retry in " + retryMsg + ".",
+      "API returned empty or invalid data structure.\nAttempt " + consecutiveFailures + ". Will retry in " + retryMsg + ".",
       "warning"
     );
     
     applyFallbackBehavior();
-    activeTimer = Timer.set(CONFIG.retryDelaySeconds * 1000, false, fetchCalendar);
+    activeTimer = Timer.set(retryDelay * 1000, false, fetchCalendar);
     return;
   }
   
@@ -426,20 +488,41 @@ function handleCalendarResponse(result, error_code, error_message) {
   if (!calendar || calendar.length === 0) {
     console.log("Empty calendar");
     
-    let retryMinutes = Math.round(CONFIG.retryDelaySeconds / 60);
-    let retrySeconds = CONFIG.retryDelaySeconds % 60;
-    let retryMsg = retryMinutes > 0 ? retryMinutes + " minutes" : retrySeconds + " seconds";
+    // Increment failure counter for exponential backoff
+    consecutiveFailures++;
+    let retryDelay = getRetryDelay();
+    
+    let retryMinutes = Math.floor(retryDelay / 60);
+    let retrySeconds = retryDelay % 60;
+    let retryMsg = retryMinutes > 0 
+      ? (retrySeconds > 0 ? retryMinutes + "m " + retrySeconds + "s" : retryMinutes + " minutes")
+      : retrySeconds + " seconds";
+    
+    console.log("Consecutive failures:", consecutiveFailures, "- retry in", retryMsg);
     
     sendNotification(
       "Empty Calendar",
-      "API returned no calendar entries.\nWill retry in " + retryMsg + ".",
+      "API returned no calendar entries.\nAttempt " + consecutiveFailures + ". Will retry in " + retryMsg + ".",
       "warning"
     );
     
     applyFallbackBehavior();
-    activeTimer = Timer.set(CONFIG.retryDelaySeconds * 1000, false, fetchCalendar);
+    activeTimer = Timer.set(retryDelay * 1000, false, fetchCalendar);
     return;
   }
+  
+  // Success - check if we're recovering from failures
+  if (consecutiveFailures > 0) {
+    console.log("Calendar API recovered after", consecutiveFailures, "failures");
+    sendNotification(
+      "Calendar API Recovered",
+      "Connection restored after " + consecutiveFailures + " failed attempt(s).",
+      "info"
+    );
+  }
+  
+  // Reset failure counter on success
+  consecutiveFailures = 0;
   
   // Parse and save calendar
   let parsedCalendar = [];
@@ -526,41 +609,8 @@ function updateSwitchState() {
     on: shouldBeOn,
   });
   
-  logStatus();
-  
-  // Check if we need to refresh calendar (at 11 AM)
-  let now = new Date();
-  let currentHour = now.getHours();
-  let currentMinute = now.getMinutes();
-  let minutesSinceMidnight = currentHour * 60 + currentMinute;
-  let calendarRefreshTime = CONFIG.calendarRefreshHour * 60;
-  
-  // If it's around calendar refresh time (11:00 +/- 30 min), fetch new calendar
-  if (Math.abs(minutesSinceMidnight - calendarRefreshTime) < 30) {
-    let lastFetch = Script.storage.getItem("calendarFetch");
-    let now = new Date();
-    
-    // Only fetch if we haven't fetched today
-    let shouldFetch = true;
-    if (lastFetch) {
-      let lastFetchDate = new Date(lastFetch);
-      let lastFetchDay = lastFetchDate.getDate();
-      let todayDay = now.getDate();
-      if (lastFetchDay === todayDay) {
-        shouldFetch = false;
-      }
-    }
-    
-    if (shouldFetch) {
-      console.log("Time to refresh calendar");
-      fetchCalendar();
-      return; // fetchCalendar will schedule next check
-    }
-  }
-  
-  // Schedule next check at the next transition time
-  let minutesUntil = getMinutesUntilNextCheck();
-  scheduleNextCheck(minutesUntil);
+  // Schedule next check
+  scheduleNextCheck();
 }
 
 // Start the smart calendar-based script

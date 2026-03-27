@@ -13,7 +13,7 @@ This guide covers two reliable notification methods:
 1. **HTTP Webhook** - Send notifications to Home Assistant, IFTTT, or any custom HTTP endpoint
 2. **MQTT** - Publish errors to an MQTT broker for home automation systems
 
-Both methods are proven, reliable, and don't depend on third-party messaging services.
+Both methods are configured via **KVS (Key-Value Store)**. See [CONFIGURATION.md](CONFIGURATION.md) for details.
 
 ---
 
@@ -21,17 +21,16 @@ Both methods are proven, reliable, and don't depend on third-party messaging ser
 
 Send notifications to any HTTP endpoint. Perfect for Home Assistant, IFTTT, or custom services.
 
-### Configuration
+### Quick Setup (KVS)
 
-```javascript
-notifications: {
-  enabled: true,
-  webhook: {
-    enabled: true,
-    url: "https://your-webhook-url.com/notify",
-    method: "POST", // or "GET"
-  }
-}
+```bash
+# Enable notifications
+http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.notificationsEnabled"&value=true
+
+# Enable and configure webhook
+http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.webhookEnabled"&value=true
+http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.webhookUrl"&value="http://your-server.com/webhook"
+http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.webhookMethod"&value="POST"
 ```
 
 ### Payload Format (POST)
@@ -40,7 +39,19 @@ notifications: {
 {
   "message": "[Tempo Script] Error Title: Details",
   "severity": "error",
-  "timestamp": "2026-01-16T10:30:00.000Z",
+  "timestamp": "2026-01-30T10:30:00.000Z",
+  "device": "Shelly Tempo Script"
+}
+```
+
+**Severity levels**: `"error"`, `"warning"`, or `"info"` (for recovery notifications)
+
+**Example recovery notification**:
+```json
+{
+  "message": "[Tempo Script] API Recovered: Connection restored after 3 failed attempt(s).",
+  "severity": "info",
+  "timestamp": "2026-01-30T11:45:00.000Z",
   "device": "Shelly Tempo Script"
 }
 ```
@@ -86,17 +97,22 @@ mode: single
    - The webhook ID in the automation above is `tempo_script_error`
    - Your URL will be: `http://YOUR_HA_IP:8123/api/webhook/tempo_script_error`
 
-4. **Update Shelly Script**:
+4. **Update Shelly Script via KVS**:
 
-```javascript
-notifications: {
-  enabled: true,
-  webhook: {
-    enabled: true,
-    url: "http://192.168.1.100:8123/api/webhook/tempo_script_error",
-    method: "POST",
-  }
-}
+```bash
+SHELLY_IP="192.168.1.50"
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.notificationsEnabled","value":true}}' \
+  http://$SHELLY_IP/rpc
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.webhookEnabled","value":true}}' \
+  http://$SHELLY_IP/rpc
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.webhookUrl","value":"http://192.168.1.100:8123/api/webhook/tempo_script_error"}}' \
+  http://$SHELLY_IP/rpc
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.webhookMethod","value":"POST"}}' \
+  http://$SHELLY_IP/rpc
 ```
 
 ### Option 2: RESTful Command
@@ -149,17 +165,23 @@ action:
    - Click **Documentation**
    - Your URL: `https://maker.ifttt.com/trigger/tempo_error/with/key/YOUR_KEY`
 
-5. **Update Shelly Script**:
+5. **Update Shelly Script via KVS**:
 
-```javascript
-notifications: {
-  enabled: true,
-  webhook: {
-    enabled: true,
-    url: "https://maker.ifttt.com/trigger/tempo_error/with/key/YOUR_KEY",
-    method: "POST",
-  }
-}
+```bash
+SHELLY_IP="192.168.1.50"
+IFTTT_KEY="YOUR_KEY"
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.notificationsEnabled","value":true}}' \
+  http://$SHELLY_IP/rpc
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.webhookEnabled","value":true}}' \
+  http://$SHELLY_IP/rpc
+
+curl -X POST -d "{\"id\":1,\"method\":\"KVS.Set\",\"params\":{\"key\":\"tempo.webhookUrl\",\"value\":\"https://maker.ifttt.com/trigger/tempo_error/with/key/$IFTTT_KEY\"}}" \
+  http://$SHELLY_IP/rpc
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.webhookMethod","value":"POST"}}' \
+  http://$SHELLY_IP/rpc
 ```
 
 ---
@@ -216,16 +238,15 @@ Publish error messages to an MQTT broker for integration with home automation sy
 - MQTT broker running (Mosquitto, Home Assistant MQTT, etc.)
 - MQTT enabled on your Shelly device
 
-### Configuration
+### Quick Setup (KVS)
 
-```javascript
-notifications: {
-  enabled: true,
-  mqtt: {
-    enabled: true,
-    topic: "shelly/tempo/errors",
-  }
-}
+```bash
+# Enable notifications
+http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.notificationsEnabled"&value=true
+
+# Enable and configure MQTT
+http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.mqttEnabled"&value=true
+http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.mqttTopic"&value="shelly/tempo/errors"
 ```
 
 ### Enable MQTT on Shelly
@@ -245,9 +266,9 @@ Published messages are JSON:
 
 ```json
 {
-  "message": "[Tempo Script] Calendar API Error: HTTP Error: -114 - Connection timeout. Will retry in 30 minutes.",
+  "message": "[Tempo Script] Calendar API Error: HTTP Error: -114 - Connection timeout. Will retry in 30 seconds.",
   "severity": "error",
-  "timestamp": "2026-01-16T10:30:00.000Z"
+  "timestamp": "2026-01-30T10:30:00.000Z"
 }
 ```
 
@@ -330,23 +351,28 @@ automation:
 
 ## Using Both Methods
 
-You can enable both webhook and MQTT simultaneously:
+You can enable both webhook and MQTT simultaneously via KVS:
 
-```javascript
-notifications: {
-  enabled: true,
-  
-  webhook: {
-    enabled: true,
-    url: "http://192.168.1.100:8123/api/webhook/tempo_error",
-    method: "POST",
-  },
-  
-  mqtt: {
-    enabled: true,
-    topic: "shelly/tempo/errors",
-  }
-}
+```bash
+SHELLY_IP="192.168.1.50"
+
+# Enable notifications
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.notificationsEnabled","value":true}}' \
+  http://$SHELLY_IP/rpc
+
+# Configure webhook
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.webhookEnabled","value":true}}' \
+  http://$SHELLY_IP/rpc
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.webhookUrl","value":"http://192.168.1.100:8123/api/webhook/tempo"}}' \
+  http://$SHELLY_IP/rpc
+
+# Configure MQTT
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.mqttEnabled","value":true}}' \
+  http://$SHELLY_IP/rpc
+
+curl -X POST -d '{"id":1,"method":"KVS.Set","params":{"key":"tempo.mqttTopic","value":"shelly/tempo/errors"}}' \
+  http://$SHELLY_IP/rpc
 ```
 
 This sends notifications to both Home Assistant (via webhook) and publishes to MQTT for other systems.
@@ -357,7 +383,8 @@ This sends notifications to both Home Assistant (via webhook) and publishes to M
 
 ### Throttling
 
-- **Maximum 1 notification per hour** for the same error type
+- **Maximum 1 error/warning notification per hour** for the same error type
+- **Recovery notifications are never throttled** - you'll always be notified when connection is restored
 - Prevents spam during extended outages
 - Check console logs for: "Notification throttled (< 1 hour since last)"
 
@@ -365,6 +392,7 @@ This sends notifications to both Home Assistant (via webhook) and publishes to M
 
 - **error** 🔴: Critical issues (API failures, connection timeouts)
 - **warning** ⚠️: Non-critical (empty data, validation issues)
+- **info** ℹ️: Recovery notifications (connection restored after failures)
 
 ### Error Types You'll Be Notified About
 
@@ -373,6 +401,20 @@ This sends notifications to both Home Assistant (via webhook) and publishes to M
 - ✅ Invalid or empty API responses
 - ✅ Calendar fetch failures
 - ✅ JSON parsing errors
+- ✅ **Recovery notifications** when connection is restored after failures
+
+### Exponential Backoff
+
+When API failures occur repeatedly, retry delays automatically increase:
+- 1st failure: Retry in 30 seconds
+- 2nd failure: Retry in 1 minute
+- 3rd failure: Retry in 2 minutes
+- 4th failure: Retry in 5 minutes
+- 5th failure: Retry in 10 minutes
+- 6th failure: Retry in 30 minutes
+- 7th+ failures: Retry in 1 hour (maximum)
+
+When the API recovers, you'll receive a recovery notification and retry delays reset to 30 seconds.
 
 ---
 
@@ -448,13 +490,10 @@ mosquitto_sub -h 192.168.1.100 -t "shelly/tempo/errors"
 
 ## Disabling Notifications
 
-To disable all notifications:
+To disable all notifications via KVS:
 
-```javascript
-notifications: {
-  enabled: false,
-  // ... rest of config
-}
+```bash
+http://YOUR_SHELLY_IP/rpc/KVS.Set?key="tempo.notificationsEnabled"&value=false
 ```
 
 The script will continue to work normally, logging errors to console only.
@@ -471,6 +510,12 @@ A: Yes! Enable both for redundancy.
 
 **Q: What if my notification service is down?**  
 A: The script continues working normally. Notification failures don't affect operation.
+
+**Q: How often will I get error notifications?**  
+A: Maximum 1 error notification per hour (throttled). Recovery notifications are always sent when connection is restored.
+
+**Q: What happens during extended internet outages?**  
+A: The script uses exponential backoff (30s → 1m → 2m → 5m → 10m → 30m → 1h max) to reduce retry frequency and resource usage. You'll get a recovery notification when internet returns.
 
 **Q: How do I test notifications?**  
 A: Temporarily change the API URL to an invalid one to trigger an error.

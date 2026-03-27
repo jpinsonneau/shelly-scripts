@@ -21,19 +21,71 @@ Both Tempo scripts (`api-commerce-edf.js` and `api-couleur-tempo.js`) use Shelly
 | `tempo.hpStartHour` | number | `6` | HP period start hour (0-23) |
 | `tempo.hpEndHour` | number | `22` | HP period end hour (0-23) |
 | `tempo.calendarRefreshHour` | number | `11` | When to fetch new calendar data (EDF API only) |
-| `tempo.colorCheckHour` | number | `11` | When to check for color updates (Simple API only) |
+| `tempo.calendarDaysAhead` | number | `1` | Days ahead to fetch (EDF API only). 1=today+tomorrow, 7=week ahead |
+| `tempo.safetyDelayMinutes` | number | `10` | Minutes before HP start to begin considering it as HP (e.g., 10 = turn on at 5:50 instead of 6:00) |
 
 ### Error Handling Settings
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `tempo.retryDelaySeconds` | number | `30` | Delay before retrying after API error (in seconds) |
+| `tempo.retryDelaySeconds` | number | `30` | Initial retry delay after API error (in seconds). Uses exponential backoff: 30s → 1m → 2m → 5m → 10m → 30m → 1h (max) |
 | `tempo.fallbackBehavior` | string | `"PREVIOUS_STATE"` | Switch behavior on API error: `"PREVIOUS_STATE"`, `"ON"`, or `"OFF"` |
+
+**Exponential Backoff**:
+The scripts automatically increase retry delays after consecutive failures:
+- 1st failure: 30 seconds
+- 2nd failure: 1 minute
+- 3rd failure: 2 minutes
+- 4th failure: 5 minutes
+- 5th failure: 10 minutes
+- 6th failure: 30 minutes
+- 7th+ failures: 1 hour (max)
+
+When the API recovers, the delay resets to 30 seconds and a recovery notification is sent.
 
 **Fallback Behavior Options**:
 - `PREVIOUS_STATE` - Keep switch in its current state when API fails (recommended)
 - `ON` - Force switch ON when API fails
 - `OFF` - Force switch OFF when API fails
+
+### Status/Monitoring Keys (Read-Only)
+
+These keys are automatically set by the scripts for external monitoring. Each script writes to its own namespace to avoid conflicts:
+
+**Third-Party API Script (`api-couleur-tempo.js`):**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `tempo.thirdparty.currentColor` | number | Current Tempo color: 1=Blue, 2=White, 3=Red |
+| `tempo.thirdparty.currentColorName` | string | Current Tempo color name: "Bleu", "Blanc", or "Rouge" |
+| `tempo.thirdparty.lastFetch` | string | ISO timestamp of last successful API fetch |
+| `tempo.thirdparty.nextCheck` | string | ISO timestamp of next scheduled check |
+
+**Official EDF API Script (`api-commerce-edf.js`):**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `tempo.edf.calendar` | string (JSON) | Calendar data: `[["2026-01-30",2,"Blanc"],["2026-01-31",1,"Bleu"]]` |
+| `tempo.edf.lastFetch` | string | ISO timestamp of last successful API fetch |
+| `tempo.edf.nextCheck` | string | ISO timestamp of next scheduled check |
+
+**Calendar format:**
+- Array of arrays: `[[date, colorCode, colorName], [date, colorCode, colorName]]`
+- Default: `calendarDaysAhead: 1` = today + tomorrow (2 days total)
+- Example: `[["2026-01-30",2,"Blanc"],["2026-01-31",1,"Bleu"]]`
+- Color codes: 1=Blue/Bleu, 2=White/Blanc, 3=Red/Rouge
+
+**Example - Read current status:**
+```bash
+# For third-party API script
+http://YOUR_SHELLY_IP/rpc/KVS.Get?key="tempo.thirdparty.currentColor"
+http://YOUR_SHELLY_IP/rpc/KVS.Get?key="tempo.thirdparty.currentColorName"
+http://YOUR_SHELLY_IP/rpc/KVS.Get?key="tempo.thirdparty.lastFetch"
+
+# For EDF API script - Get today+tomorrow
+http://YOUR_SHELLY_IP/rpc/KVS.Get?key="tempo.edf.calendar"
+http://YOUR_SHELLY_IP/rpc/KVS.Get?key="tempo.edf.lastFetch"
+```
 
 ### Notification Settings
 
